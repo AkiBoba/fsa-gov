@@ -2,6 +2,8 @@ package com.example.fsa_gov.client;
 
 import com.example.fsa_gov.dto.CertificateRequestDto;
 import com.example.fsa_gov.dto.CertificateResponseDto;
+import com.example.fsa_gov.dto.async.AsyncFindDocRequest;
+import com.example.fsa_gov.dto.async.AsyncFindDocResponse;
 import com.example.fsa_gov.exception.FsaApiException;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -74,5 +76,41 @@ public class FsaClient {
             // Если не удалось распарсить — возвращаем просто код
             return new FsaApiException(statusCode);
         }
+    }
+
+    /**
+     * Асинхронный поиск по списку СС РФ.
+     */
+    public AsyncFindDocResponse asyncRssFindDoc(AsyncFindDocRequest request) {
+        return webClient.post()
+                .uri("/async/rss/find-doc")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .onStatus(status -> status.isError(),
+                        response -> response.bodyToMono(String.class)
+                                .defaultIfEmpty("")
+                                .map(body -> parseError(response.statusCode().value(), body)))
+                .bodyToMono(AsyncFindDocResponse.class)
+                .block(); // для Spring MVC — блокируем
+    }
+
+    /**
+     * Асинхронный поиск по списку документов ЕАЭС.
+     */
+    public AsyncFindDocResponse asyncReaeuFindDoc(AsyncFindDocRequest request) {
+        return webClient.post()
+                .uri("/async/reaeu/find-doc")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .onStatus(status -> status.isError(),
+                        response -> response.bodyToMono(String.class)
+                                .defaultIfEmpty("")
+                                .map(body -> parseError(response.statusCode().value(), body)))
+                .bodyToMono(AsyncFindDocResponse.class)
+                .block();
     }
 }
