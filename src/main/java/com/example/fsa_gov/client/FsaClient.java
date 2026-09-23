@@ -4,7 +4,10 @@ import com.example.fsa_gov.dto.CertificateRequestDto;
 import com.example.fsa_gov.dto.CertificateResponseDto;
 import com.example.fsa_gov.dto.async.AsyncFindDocRequest;
 import com.example.fsa_gov.dto.async.AsyncFindDocResponse;
+import com.example.fsa_gov.dto.async.AsyncStatusResponse;
 import com.example.fsa_gov.exception.FsaApiException;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.web.reactive.function.client.ClientResponse;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -112,5 +115,50 @@ public class FsaClient {
                                 .map(body -> parseError(response.statusCode().value(), body)))
                 .bodyToMono(AsyncFindDocResponse.class)
                 .block();
+    }
+
+    /** Получить статус обработки асинхронного запроса */
+    public AsyncStatusResponse asyncRequestStatus(String requestId) {
+        return webClient.get()
+                .uri("/async/status/{requestId}", requestId)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::handleError)
+                .bodyToMono(AsyncStatusResponse.class)
+                .block();
+    }
+
+    /** Скачать результат (JSONL.GZ) */
+    public byte[] asyncRequestResult(String requestId) {
+        return webClient.get()
+                .uri("/async/result/{requestId}", requestId)
+                .accept(MediaType.APPLICATION_OCTET_STREAM)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::handleError)
+                .bodyToMono(byte[].class)
+                .block();
+    }
+
+    /** Скачать файл ошибок (JSONL.GZ) */
+    public byte[] asyncRequestErrors(String requestId) {
+        return webClient.get()
+                .uri("/async/errors/{requestId}", requestId)
+                .accept(MediaType.APPLICATION_OCTET_STREAM)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::handleError)
+                .bodyToMono(byte[].class)
+                .block();
+    }
+
+    /**
+     * Универсальный обработчик ошибок WebClient.
+     * Преобразует ответ с ошибкой (4xx/5xx) в {@link FsaApiException}.
+     *
+     * @param response ответ от API ФСА
+     * @return Mono с исключением (для .onStatus)
+     */
+    private Mono<? extends Throwable> handleError(ClientResponse response) {
+        return response.bodyToMono(String.class)
+                .defaultIfEmpty("")
+                .map(body -> parseError(response.statusCode().value(), body));
     }
 }
