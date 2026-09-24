@@ -9,8 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
-import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 @Slf4j
@@ -22,7 +21,7 @@ public class CertificateImportService {
     private final ImportJobStore jobStore;
     private final ImportJobRunner jobRunner;
 
-    public ParseResult parseLines(java.util.List<String> lines) {
+    public ParseResult parseLines(List<String> lines) {
         ParseResult result = parser.parse(lines);
         log.info("Парсинг: РФ={}, ЕАЭС={}, мусор={}",
                 result.getRfCertificates().size(),
@@ -44,7 +43,7 @@ public class CertificateImportService {
     /**
      * Синхронный запуск: ждёт, пока job не перейдёт в SUCCESS/FAILED.
      */
-    public ImportJobState runSync(java.util.List<String> lines) {
+    public ImportJobState runSync(List<String> lines) {
         ParseResult parsed = parseLines(lines);
         ImportJobState state = jobStore.create();
         jobRunner.runSync(state, parsed); // блокирующий вызов
