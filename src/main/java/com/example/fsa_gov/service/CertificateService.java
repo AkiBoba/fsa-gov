@@ -15,4 +15,8 @@ public class CertificateService {
     public CertificateResponseDto getCertificate(CertificateRequestDto request) {
         return fsaClient.getCertificate(request);
     }
+
+    public CertificateResponseDto getEaeuCertificate(CertificateRequestDto request) {
+        return fsaClient.getEaeuCertificate(request);
+    }
 }

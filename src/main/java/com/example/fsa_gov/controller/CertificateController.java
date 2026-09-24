@@ -49,4 +49,11 @@ public class CertificateController {
             @Valid @RequestBody CertificateRequestDto request) {
         return ResponseEntity.ok(certificateService.getCertificate(request));
     }
+
+    @PostMapping("/reaeu/get")
+    @Operation(summary = "Получение сертификата ЕАЭС")
+    public ResponseEntity<CertificateResponseDto> getEaeuCertificate(
+            @Valid @RequestBody CertificateRequestDto request) {
+        return ResponseEntity.ok(certificateService.getEaeuCertificate(request));
+    }
 }

@@ -48,6 +48,18 @@ public class FsaClient {
                 .block();
     }
 
+    public CertificateResponseDto getEaeuCertificate(CertificateRequestDto request) {
+        return webClient.post()
+                .uri("/sync/reaeu/get")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(request)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, this::handleError)
+                .bodyToMono(CertificateResponseDto.class)
+                .block();
+    }
+
     /* ======================= ASYNC ======================= */
 
     public AsyncFindDocResponse asyncRssFindDoc(AsyncFindDocRequest request) {
