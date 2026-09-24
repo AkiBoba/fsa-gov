@@ -6,18 +6,22 @@ import com.example.fsa_gov.dto.async.AsyncFindDocRequest;
 import com.example.fsa_gov.dto.async.AsyncFindDocResponse;
 import com.example.fsa_gov.dto.async.AsyncStatusResponse;
 import com.example.fsa_gov.exception.FsaApiException;
-import org.springframework.http.HttpStatusCode;
-import org.springframework.web.reactive.function.client.ClientResponse;
+import com.example.fsa_gov.response.FsaApiErrorResponse;
 import tools.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 /**
  * Клиент для взаимодействия с API ФСА (ФГИС Росаккредитация).
+ * Все ошибки приводятся к {@link FsaApiException}.
  */
+@Slf4j
 @Component
 public class FsaClient {
 
@@ -30,60 +34,22 @@ public class FsaClient {
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * Получает информацию по одному сертификату соответствия РФ (СС).
-     *
-     * @param request DTO с данными запроса (numberDoc, regDate, applicantInn)
-     * @return Mono&lt;CertificateResponseDto&gt; — ответ API ФСА или ошибку
-     */
-    public Mono<CertificateResponseDto> getCertificate(CertificateRequestDto request) {
+    /* ======================= SYNC ======================= */
+
+    public CertificateResponseDto getCertificate(CertificateRequestDto request) {
         return webClient.post()
                 .uri("/sync/rss/get")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()
-                // Обработка ошибок: любой 4xx/5xx → FsaApiException с телом ответа
-                .onStatus(
-                        status -> status.isError(),
-                        response -> response.bodyToMono(String.class)
-                                .defaultIfEmpty("")
-                                .map(body -> parseError(response.statusCode().value(), body))
-                )
-                .bodyToMono(CertificateResponseDto.class);
+                .onStatus(HttpStatusCode::isError, this::handleError)
+                .bodyToMono(CertificateResponseDto.class)
+                .block();
     }
 
-    /**
-     * Пытается распарсить тело ошибки ФСА в структурированный FsaApiException.
-     * Если не получается — возвращает исключение только с кодом.
-     */
-    private FsaApiException parseError(int statusCode, String body) {
-        if (body == null || body.isBlank()) {
-            return new FsaApiException(statusCode);
-        }
-        try {
-            // Предполагаем, что тело ошибки соответствует FsaApiErrorResponse
-            var errorResponse = objectMapper.readValue(
-                    body,
-                    com.example.fsa_gov.response.FsaApiErrorResponse.class
-            );
-            return new FsaApiException(
-                    statusCode,
-                    errorResponse.getCode(),
-                    errorResponse.getDetail() != null
-                            ? errorResponse.getDetail()
-                            : errorResponse.getDescription(),
-                    errorResponse.getInstance()
-            );
-        } catch (Exception e) {
-            // Если не удалось распарсить — возвращаем просто код
-            return new FsaApiException(statusCode);
-        }
-    }
+    /* ======================= ASYNC ======================= */
 
-    /**
-     * Асинхронный поиск по списку СС РФ.
-     */
     public AsyncFindDocResponse asyncRssFindDoc(AsyncFindDocRequest request) {
         return webClient.post()
                 .uri("/async/rss/find-doc")
@@ -91,17 +57,11 @@ public class FsaClient {
                 .accept(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()
-                .onStatus(status -> status.isError(),
-                        response -> response.bodyToMono(String.class)
-                                .defaultIfEmpty("")
-                                .map(body -> parseError(response.statusCode().value(), body)))
+                .onStatus(HttpStatusCode::isError, this::handleError)
                 .bodyToMono(AsyncFindDocResponse.class)
-                .block(); // для Spring MVC — блокируем
+                .block();
     }
 
-    /**
-     * Асинхронный поиск по списку документов ЕАЭС.
-     */
     public AsyncFindDocResponse asyncReaeuFindDoc(AsyncFindDocRequest request) {
         return webClient.post()
                 .uri("/async/reaeu/find-doc")
@@ -109,15 +69,11 @@ public class FsaClient {
                 .accept(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()
-                .onStatus(status -> status.isError(),
-                        response -> response.bodyToMono(String.class)
-                                .defaultIfEmpty("")
-                                .map(body -> parseError(response.statusCode().value(), body)))
+                .onStatus(HttpStatusCode::isError, this::handleError)
                 .bodyToMono(AsyncFindDocResponse.class)
                 .block();
     }
 
-    /** Получить статус обработки асинхронного запроса */
     public AsyncStatusResponse asyncRequestStatus(String requestId) {
         return webClient.get()
                 .uri("/async/status/{requestId}", requestId)
@@ -127,7 +83,6 @@ public class FsaClient {
                 .block();
     }
 
-    /** Скачать результат (JSONL.GZ) */
     public byte[] asyncRequestResult(String requestId) {
         return webClient.get()
                 .uri("/async/result/{requestId}", requestId)
@@ -138,7 +93,6 @@ public class FsaClient {
                 .block();
     }
 
-    /** Скачать файл ошибок (JSONL.GZ) */
     public byte[] asyncRequestErrors(String requestId) {
         return webClient.get()
                 .uri("/async/errors/{requestId}", requestId)
@@ -149,16 +103,25 @@ public class FsaClient {
                 .block();
     }
 
-    /**
-     * Универсальный обработчик ошибок WebClient.
-     * Преобразует ответ с ошибкой (4xx/5xx) в {@link FsaApiException}.
-     *
-     * @param response ответ от API ФСА
-     * @return Mono с исключением (для .onStatus)
-     */
+    /* ======================= ERROR ======================= */
+
     private Mono<? extends Throwable> handleError(ClientResponse response) {
         return response.bodyToMono(String.class)
                 .defaultIfEmpty("")
                 .map(body -> parseError(response.statusCode().value(), body));
+    }
+
+    private FsaApiException parseError(int statusCode, String body) {
+        if (body == null || body.isBlank()) {
+            return new FsaApiException(statusCode);
+        }
+        try {
+            FsaApiErrorResponse err = objectMapper.readValue(body, FsaApiErrorResponse.class);
+            String detail = err.getDetail() != null ? err.getDetail() : err.getDescription();
+            return new FsaApiException(statusCode, err.getCode(), detail, err.getInstance());
+        } catch (Exception e) {
+            log.debug("Не удалось распарсить тело ошибки ФСА: {}", body, e);
+            return new FsaApiException(statusCode);
+        }
     }
 }

@@ -7,12 +7,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
@@ -31,9 +26,6 @@ public class CertificateImportController {
         return ResponseEntity.ok(importService.parseLines(lines));
     }
 
-    /**
-     * Запускает асинхронную проверку. Возвращает jobId сразу.
-     */
     @PostMapping("/start-async")
     @Operation(summary = "Запустить проверку асинхронно (возвращает jobId)")
     public ResponseEntity<Map<String, String>> startAsync(@RequestBody List<String> lines) {
@@ -48,5 +40,15 @@ public class CertificateImportController {
         return importService.getJob(jobId)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /**
+     * СИНХРОННЫЙ импорт: ждёт завершения и сразу возвращает готовый результат.
+     * Удобно для быстрой проверки списка номеров.
+     */
+    @PostMapping("/run-sync")
+    @Operation(summary = "Синхронная проверка списка (ждёт завершения)")
+    public ResponseEntity<ImportJobState> runSync(@RequestBody List<String> lines) {
+        return ResponseEntity.ok(importService.runSync(lines));
     }
 }

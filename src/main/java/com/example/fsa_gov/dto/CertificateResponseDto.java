@@ -1,61 +1,62 @@
 package com.example.fsa_gov.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
+
 import java.util.List;
-import java.util.Optional;
 
 /**
- * DTO для полного ответа API ФСА о сертификате соответствия РФ (СС).
+ * DTO для ответа API ФСА о сертификате (СС РФ или ЕАЭС).
+ * Поля сделаны устойчивыми к различиям схем РФ/ЕАЭС.
  */
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)   // игнорируем новые поля
 public class CertificateResponseDto {
 
-    /** Идентификатор документа во ФГИС Росаккредитация. */
-    private Long id;
+    /** ID документа. ФСА отдаёт либо число, либо UUID-строку — поэтому String. */
+    private String id;
 
-    /** Номер разрешительного документа. */
+    /** Внутренний ObjectId (только у ЕАЭС). */
+    private String objectId;
+
+    /** Номер документа. */
     private String numberDoc;
 
-    /** Дата регистрации в формате YYYY-MM-DD. */
+    /** Дата регистрации YYYY-MM-DD. */
     private String regDate;
 
-    /** Дата истечения срока действия (nullable). */
-    private Optional<String> endDate = Optional.empty();
+    /** Дата окончания действия (nullable). */
+    private String endDate;
 
-    /** Статус документа: 6=действует, 14=прекращен, 15=приостановлен и т.д. */
+    // --- Статусы: РФ и ЕАЭС отдают по-разному ---
+    /** РФ: числовой статус (6, 14, 15...). */
     private Integer idStatus;
+    /** ЕАЭС: строковый статус ("01", "02"...). */
+    private String idStatusEAEU;
+    /** РФ: числовой статус в реестре РФ (может отсутствовать у ЕАЭС). */
+    private Integer idStatusInRF;
 
-    /** Тип документа: 2=декларация ЕАЭС, 11=сертификат РФ и др. */
+    // --- Типы документов ---
+    /** РФ: числовой тип (2, 11...). */
     private Integer idDocType;
+    /** ЕАЭС: строковый тип ("05"...). */
+    private String idDocTypeEAEU;
 
-    /** Список продукции в документе (nullable). */
+    // --- Продукция и регламенты ---
     private List<ProductItemDto> products;
-
-    /** Список технических регламентов (nullable). */
     private List<String> techRegs;
-
-    /** Список групп продукции (nullable). */
     private List<String> productGroups;
+    private List<String> productSingleLists;
 
-    /** Единый перечень продукции (nullable). */
-    private Optional<List<String>> productSingleLists = Optional.empty();
-
-    /** Наименование изготовителя. */
+    // --- Изготовитель ---
     private String manufacturerName;
-
-    /** Адрес изготовителя. */
     private String manufacturerAddress;
-
-    /** Список адресов филиалов/деятельности (nullable). */
     private List<String> manufacturerFilialsAddress;
 
-    /** Идентификатор заменённого документа (nullable). */
-    private Optional<Long> idDocReplaced = Optional.empty();
+    // --- Связи (только РФ) ---
+    private Long idDocReplaced;
+    private Long idDocRegInstead;
 
-    /** Идентификатор выданного взамен этого документа (nullable). */
-    private Optional<Long> idDocRegInstead = Optional.empty();
-
-    /** Дата последнего обновления в формате ISO 8601. */
+    /** Дата обновления ISO 8601. */
     private String updated;
-
 }

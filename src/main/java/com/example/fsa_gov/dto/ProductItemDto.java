@@ -1,5 +1,6 @@
 package com.example.fsa_gov.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
 import java.util.List;
 
@@ -7,6 +8,7 @@ import java.util.List;
  * DTO для объекта продукции внутри разрешительного документа.
  */
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class ProductItemDto {
 
     /**

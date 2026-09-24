@@ -2,7 +2,10 @@ package com.example.fsa_gov.service.job;
 
 import com.example.fsa_gov.client.FsaClient;
 import com.example.fsa_gov.dto.CertificateResponseDto;
-import com.example.fsa_gov.dto.async.*;
+import com.example.fsa_gov.dto.async.AsyncErrorEntry;
+import com.example.fsa_gov.dto.async.AsyncFindDocRequest;
+import com.example.fsa_gov.dto.async.AsyncStatusResponse;
+import com.example.fsa_gov.dto.async.FindDocItem;
 import com.example.fsa_gov.parser.dto.ParseResult;
 import com.example.fsa_gov.util.JsonlGzReader;
 import lombok.RequiredArgsConstructor;
@@ -15,9 +18,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-/**
- * Асинхронный воркер: запускает запросы, ждёт статусы, делает fallback.
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -27,83 +27,79 @@ public class ImportJobRunner {
     private final JsonlGzReader jsonlGzReader;
     private final ImportJobStore jobStore;
 
-    private static final long POLL_TIMEOUT_MS = 120_000; // 2 мин
-    private static final long POLL_INTERVAL_MS = 2_000;
+    private static final long POLL_TIMEOUT_MS = 120_000L;
+    private static final long POLL_INTERVAL_MS = 2_000L;
 
+    /** Асинхронный запуск (для /start-async). */
     @Async("importExecutor")
     public void run(ImportJobState state, ParseResult parsed) {
+        process(state, parsed);
+    }
+
+    /** Синхронный запуск (для /run-sync). */
+    public void runSync(ImportJobState state, ParseResult parsed) {
+        process(state, parsed);
+    }
+
+    /** Общая логика — выполняется в текущем потоке в обоих случаях. */
+    private void process(ImportJobState state, ParseResult parsed) {
         try {
             state.setStatus(ImportJobState.JobStatus.RUNNING);
             state.setInvalidEntries(parsed.getInvalidEntries());
             jobStore.update(state);
 
-            // 1. Запускаем оба запроса
-            if (!parsed.getRfCertificates().isEmpty()) {
-                state.setRfRequestId(fsaClient.asyncRssFindDoc(
-                        buildRequest(parsed.getRfCertificates())).getRequestId());
+            if (parsed.getRfCertificates() != null && !parsed.getRfCertificates().isEmpty()) {
+                state.setRfRequestId(startAsync(state, parsed.getRfCertificates(), true));
             }
-            if (!parsed.getEaeuCertificates().isEmpty()) {
-                state.setEaeuRequestId(fsaClient.asyncReaeuFindDoc(
-                        buildRequest(parsed.getEaeuCertificates())).getRequestId());
+            if (parsed.getEaeuCertificates() != null && !parsed.getEaeuCertificates().isEmpty()) {
+                state.setEaeuRequestId(startAsync(state, parsed.getEaeuCertificates(), false));
             }
             jobStore.update(state);
 
-            // 2. Ждём завершения
             waitForCompletion(state.getRfRequestId());
             waitForCompletion(state.getEaeuRequestId());
 
-            // 3. Читаем результаты
             List<CertificateResponseDto> rfFound = readResult(state.getRfRequestId());
             List<CertificateResponseDto> eaeuFound = readResult(state.getEaeuRequestId());
 
-            // 4. Читаем ошибки
             List<AsyncErrorEntry> rfErrors = readErrors(state.getRfRequestId());
             List<AsyncErrorEntry> eaeuErrors = readErrors(state.getEaeuRequestId());
 
-            // 5. Fallback
+            state.setRfFound(toNumberDocs(rfFound));
+            state.setEaeuFound(toNumberDocs(eaeuFound));
+
             List<String> rfNotFound = extractNotFound(rfErrors);
+            log.info("Job {}: ошибок РФ={}, ЕАЭС={}", state.getJobId(), rfErrors.size(), eaeuErrors.size());
+            for (AsyncErrorEntry e : rfErrors)  log.debug("  RF error: {} — {}", e.getNumberDoc(), e.getReason());
+            for (AsyncErrorEntry e : eaeuErrors) log.debug("  EAEU error: {} — {}", e.getNumberDoc(), e.getReason());
             List<String> eaeuNotFound = extractNotFound(eaeuErrors);
             state.setRfNotFound(rfNotFound);
             state.setEaeuNotFound(eaeuNotFound);
 
             if (!rfNotFound.isEmpty()) {
-                state.setFallbackEaeuRequestId(
-                        fsaClient.asyncReaeuFindDoc(buildRequest(rfNotFound)).getRequestId());
-                waitForCompletion(state.getFallbackEaeuRequestId());
-            }
-            if (!eaeuNotFound.isEmpty()) {
-                state.setFallbackRfRequestId(
-                        fsaClient.asyncRssFindDoc(buildRequest(eaeuNotFound)).getRequestId());
-                waitForCompletion(state.getFallbackRfRequestId());
-            }
-
-            // РФ-документы, не найденные в РФ, но найденные в ЕАЭС
-            if (!rfNotFound.isEmpty()) {
-                state.setFallbackEaeuRequestId(
-                        fsaClient.asyncReaeuFindDoc(buildRequest(rfNotFound)).getRequestId());
-                waitForCompletion(state.getFallbackEaeuRequestId());
-
-                List<CertificateResponseDto> fallbackFound = readResult(state.getFallbackEaeuRequestId());
-                // добавляем к eaeuFound (или к отдельному списку fallbackFoundInEaeu)
+                log.info("Job {}: fallback РФ→ЕАЭС для {} номеров", state.getJobId(), rfNotFound.size());
+                String fbId = startAsync(state, rfNotFound, false);
+                state.setFallbackEaeuRequestId(fbId);
+                waitForCompletion(fbId);
                 state.setEaeuFound(mergeDistinct(state.getEaeuFound(),
-                        fallbackFound.stream().map(CertificateResponseDto::getNumberDoc).toList()));
+                        toNumberDocs(readResult(fbId))));
             }
 
             if (!eaeuNotFound.isEmpty()) {
-                state.setFallbackRfRequestId(
-                        fsaClient.asyncRssFindDoc(buildRequest(eaeuNotFound)).getRequestId());
-                waitForCompletion(state.getFallbackRfRequestId());
-
-                List<CertificateResponseDto> fallbackFound = readResult(state.getFallbackRfRequestId());
-                state.setRfFound(mergeDistinct(
-                        state.getRfFound(),
-                        fallbackFound.stream().map(CertificateResponseDto::getNumberDoc).toList()));
+                log.info("Job {}: fallback ЕАЭС→РФ для {} номеров", state.getJobId(), eaeuNotFound.size());
+                String fbId = startAsync(state, eaeuNotFound, true);
+                state.setFallbackRfRequestId(fbId);
+                waitForCompletion(fbId);
+                state.setRfFound(mergeDistinct(state.getRfFound(),
+                        toNumberDocs(readResult(fbId))));
             }
 
-            // 6. Финализируем
             state.setStatus(ImportJobState.JobStatus.SUCCESS);
             jobStore.update(state);
-            log.info("Job {} завершён успешно", state.getJobId());
+            log.info("Job {} завершён. РФ={}, ЕАЭС={}, не найдено РФ={}, не найдено ЕАЭС={}",
+                    state.getJobId(),
+                    size(state.getRfFound()), size(state.getEaeuFound()),
+                    size(state.getRfNotFound()), size(state.getEaeuNotFound()));
 
         } catch (Exception e) {
             log.error("Job {} упал", state.getJobId(), e);
@@ -113,21 +109,24 @@ public class ImportJobRunner {
         }
     }
 
-    private List<String> mergeDistinct(List<String> a, List<String> b) {
-        Set<String> set = new LinkedHashSet<>();
-        if (a != null) set.addAll(a);
-        if (b != null) set.addAll(b);
-        return new ArrayList<>(set);
+    /* ======================= helpers ======================= */
+
+    private String startAsync(ImportJobState state, List<String> numbers, boolean rf) {
+        AsyncFindDocRequest request = buildRequest(numbers);
+        var response = rf
+                ? fsaClient.asyncRssFindDoc(request)
+                : fsaClient.asyncReaeuFindDoc(request);
+        if (response == null || response.getRequestId() == null) {
+            throw new IllegalStateException("API ФСА не вернул requestId для " + (rf ? "РФ" : "ЕАЭС"));
+        }
+        return response.getRequestId();
     }
 
-    // ===== helpers (те же, что были) =====
-
     private AsyncFindDocRequest buildRequest(List<String> numbers) {
-        return AsyncFindDocRequest.builder()
-                .items(numbers.stream()
-                        .map(num -> new FindDocItem(num, null, null))
-                        .toList())
-                .build();
+        List<FindDocItem> items = numbers.stream()
+                .map(num -> new FindDocItem(num, null, null))
+                .toList();
+        return AsyncFindDocRequest.builder().items(items).build();
     }
 
     private void waitForCompletion(String requestId) {
@@ -136,7 +135,7 @@ public class ImportJobRunner {
         while (System.currentTimeMillis() < deadline) {
             try {
                 AsyncStatusResponse status = fsaClient.asyncRequestStatus(requestId);
-                String s = status.getStatus() == null ? "" : status.getStatus().trim();
+                String s = status == null || status.getStatus() == null ? "" : status.getStatus().trim();
                 if ("SUCCESS".equals(s) || "FAILED".equals(s)) return;
                 Thread.sleep(POLL_INTERVAL_MS);
             } catch (InterruptedException e) {
@@ -154,13 +153,28 @@ public class ImportJobRunner {
         if (requestId == null) return List.of();
         try {
             AsyncStatusResponse status = fsaClient.asyncRequestStatus(requestId);
-            if (status.getErrorsAvailable() == null || !status.getErrorsAvailable()) {
+            if (status == null || !Boolean.TRUE.equals(status.getErrorsAvailable())) {
                 return List.of();
             }
             byte[] gz = fsaClient.asyncRequestErrors(requestId);
             return jsonlGzReader.read(gz, AsyncErrorEntry.class);
         } catch (Exception e) {
             log.error("Ошибка чтения ошибок {}", requestId, e);
+            return List.of();
+        }
+    }
+
+    private List<CertificateResponseDto> readResult(String requestId) {
+        if (requestId == null) return List.of();
+        try {
+            AsyncStatusResponse status = fsaClient.asyncRequestStatus(requestId);
+            if (status == null || !Boolean.TRUE.equals(status.getResultAvailable())) {
+                return List.of();
+            }
+            byte[] gz = fsaClient.asyncRequestResult(requestId);
+            return jsonlGzReader.read(gz, CertificateResponseDto.class);
+        } catch (Exception e) {
+            log.error("Ошибка чтения результата {}", requestId, e);
             return List.of();
         }
     }
@@ -175,18 +189,21 @@ public class ImportJobRunner {
         return result;
     }
 
-    private List<CertificateResponseDto> readResult(String requestId) {
-        if (requestId == null) return List.of();
-        try {
-            AsyncStatusResponse status = fsaClient.asyncRequestStatus(requestId);
-            if (status.getResultAvailable() == null || !status.getResultAvailable()) {
-                return List.of();
-            }
-            byte[] gz = fsaClient.asyncRequestResult(requestId);
-            return jsonlGzReader.read(gz, CertificateResponseDto.class);
-        } catch (Exception e) {
-            log.error("Ошибка чтения результата {}", requestId, e);
-            return List.of();
-        }
+    private List<String> toNumberDocs(List<CertificateResponseDto> list) {
+        return list.stream()
+                .map(CertificateResponseDto::getNumberDoc)
+                .filter(n -> n != null && !n.isBlank())
+                .toList();
+    }
+
+    private List<String> mergeDistinct(List<String> a, List<String> b) {
+        Set<String> set = new LinkedHashSet<>();
+        if (a != null) set.addAll(a);
+        if (b != null) set.addAll(b);
+        return new ArrayList<>(set);
+    }
+
+    private int size(List<?> l) {
+        return l == null ? 0 : l.size();
     }
 }
