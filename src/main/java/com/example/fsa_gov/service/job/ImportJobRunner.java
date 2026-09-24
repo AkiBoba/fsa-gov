@@ -14,9 +14,9 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -30,18 +30,15 @@ public class ImportJobRunner {
     private static final long POLL_TIMEOUT_MS = 120_000L;
     private static final long POLL_INTERVAL_MS = 2_000L;
 
-    /** Асинхронный запуск (для /start-async). */
     @Async("importExecutor")
     public void run(ImportJobState state, ParseResult parsed) {
         process(state, parsed);
     }
 
-    /** Синхронный запуск (для /run-sync). */
     public void runSync(ImportJobState state, ParseResult parsed) {
         process(state, parsed);
     }
 
-    /** Общая логика — выполняется в текущем потоке в обоих случаях. */
     private void process(ImportJobState state, ParseResult parsed) {
         try {
             state.setStatus(ImportJobState.JobStatus.RUNNING);
@@ -65,13 +62,20 @@ public class ImportJobRunner {
             List<AsyncErrorEntry> rfErrors = readErrors(state.getRfRequestId());
             List<AsyncErrorEntry> eaeuErrors = readErrors(state.getEaeuRequestId());
 
-            state.setRfFound(toNumberDocs(rfFound));
-            state.setEaeuFound(toNumberDocs(eaeuFound));
+            state.setRfFound(rfFound);
+            state.setEaeuFound(eaeuFound);
+
+            log.info("Job {}: ошибок РФ={}, ЕАЭС={}", state.getJobId(), rfErrors.size(), eaeuErrors.size());
+            for (AsyncErrorEntry e : rfErrors) {
+                log.info("  RF  err: numberDoc=[{}], reason={}, matchCount={}",
+                        e.getNumberDoc(), e.getReason(), e.getMatchCount());
+            }
+            for (AsyncErrorEntry e : eaeuErrors) {
+                log.info("  EAEU err: numberDoc=[{}], reason={}, matchCount={}",
+                        e.getNumberDoc(), e.getReason(), e.getMatchCount());
+            }
 
             List<String> rfNotFound = extractNotFound(rfErrors);
-            log.info("Job {}: ошибок РФ={}, ЕАЭС={}", state.getJobId(), rfErrors.size(), eaeuErrors.size());
-            for (AsyncErrorEntry e : rfErrors)  log.debug("  RF error: {} — {}", e.getNumberDoc(), e.getReason());
-            for (AsyncErrorEntry e : eaeuErrors) log.debug("  EAEU error: {} — {}", e.getNumberDoc(), e.getReason());
             List<String> eaeuNotFound = extractNotFound(eaeuErrors);
             state.setRfNotFound(rfNotFound);
             state.setEaeuNotFound(eaeuNotFound);
@@ -81,8 +85,7 @@ public class ImportJobRunner {
                 String fbId = startAsync(state, rfNotFound, false);
                 state.setFallbackEaeuRequestId(fbId);
                 waitForCompletion(fbId);
-                state.setEaeuFound(mergeDistinct(state.getEaeuFound(),
-                        toNumberDocs(readResult(fbId))));
+                state.setEaeuFound(mergeDistinctDtos(state.getEaeuFound(), readResult(fbId)));
             }
 
             if (!eaeuNotFound.isEmpty()) {
@@ -90,8 +93,7 @@ public class ImportJobRunner {
                 String fbId = startAsync(state, eaeuNotFound, true);
                 state.setFallbackRfRequestId(fbId);
                 waitForCompletion(fbId);
-                state.setRfFound(mergeDistinct(state.getRfFound(),
-                        toNumberDocs(readResult(fbId))));
+                state.setRfFound(mergeDistinctDtos(state.getRfFound(), readResult(fbId)));
             }
 
             state.setStatus(ImportJobState.JobStatus.SUCCESS);
@@ -189,18 +191,18 @@ public class ImportJobRunner {
         return result;
     }
 
-    private List<String> toNumberDocs(List<CertificateResponseDto> list) {
-        return list.stream()
-                .map(CertificateResponseDto::getNumberDoc)
-                .filter(n -> n != null && !n.isBlank())
-                .toList();
-    }
-
-    private List<String> mergeDistinct(List<String> a, List<String> b) {
-        Set<String> set = new LinkedHashSet<>();
-        if (a != null) set.addAll(a);
-        if (b != null) set.addAll(b);
-        return new ArrayList<>(set);
+    /** Мерж двух списков DTO с дедупликацией по numberDoc. */
+    private List<CertificateResponseDto> mergeDistinctDtos(
+            List<CertificateResponseDto> a,
+            List<CertificateResponseDto> b) {
+        Map<String, CertificateResponseDto> map = new LinkedHashMap<>();
+        if (a != null) for (CertificateResponseDto d : a) {
+            if (d != null && d.getNumberDoc() != null) map.putIfAbsent(d.getNumberDoc(), d);
+        }
+        if (b != null) for (CertificateResponseDto d : b) {
+            if (d != null && d.getNumberDoc() != null) map.putIfAbsent(d.getNumberDoc(), d);
+        }
+        return new ArrayList<>(map.values());
     }
 
     private int size(List<?> l) {
