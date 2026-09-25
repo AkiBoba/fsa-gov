@@ -7,6 +7,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
+/**
+ * Парсер списка сертификатов.
+ *
+ * Логика:
+ *  - убираем только технический префикс "Сертификаты номенклатуры";
+ *  - если строка явно похожа на РФ-формат — отправляем в РФ;
+ *  - всё остальное — в ЕАЭС;
+ *  - решение "мусор/не мусор" принимает API ФСА (вернёт not_found).
+ */
 @Component
 public class CertificateListParser {
 
@@ -15,24 +24,17 @@ public class CertificateListParser {
             Pattern.compile("Сертификаты[\\s\\p{Zs}]+номенклатуры[\\s\\p{Zs}]*",
                     Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
-    /** Маркеры ЕАЭС — проверяются по нормализованной строке */
-    private static final Pattern EAES_PREFIX =
-            Pattern.compile("^(ЕАЭС|ТС\\s*[-\\s]?[BВ]?[YУ]?)[\\s\\p{Zs}].*",
-                    Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Маркеры РФ — проверяются по нормализованной строке */
+    /**
+     * РФ-маркеры (проверяются по нормализованной строке):
+     *   РОСС RU..., РОСС XX...., ТС RU..., RU.xx..., NNNNNN/...
+     */
     private static final Pattern RF_PREFIX =
-            Pattern.compile("^(РОСС\\s+RU|ТС\\s+RU|RU\\.\\d|\\d{6}\\/).*",
+            Pattern.compile("^(РОСС\\s+RU|РОСС\\s+[A-Z]{2}\\.|РООС\\s+RU|ТС\\s+RU|RU\\.\\d|\\d{6}\\/).*",
                     Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
-    /** Явный мусор */
-    private static final Pattern JUNK_PATTERN =
-            Pattern.compile("^(Письмо|Решение|тест|Белкард|Письмо_|Письмо\\s+№).*",
-                    Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
-
-    /** Похожие символы: латиница → кириллица */
-    private static final String LATIN  = "EABCOPKMTHXYeabcopkmthxy";
-    private static final String CYRIL  = "ЕАВСОРКМТНХУеаьсоркмтнху";
+    /** Похожие символы: латиница → кириллица (только для проверки) */
+    private static final String LATIN = "EABCOPKMTHXYeabcopkmthxy";
+    private static final String CYRIL = "ЕАВСОРКМТНХУеаьсоркмтнху";
 
     public ParseResult parse(List<String> lines) {
         List<String> rf = new ArrayList<>();
@@ -62,28 +64,20 @@ public class CertificateListParser {
             // 2. Убираем префикс "Сертификаты номенклатуры"
             String cleaned = NOMENCLATURE_PREFIX.matcher(normalized).replaceAll("").trim();
 
-            // 3. Пустая строка
+            // 3. Пустая строка — только это считаем "invalid"
             if (cleaned.isEmpty()) {
                 invalid.add(rawLine);
                 continue;
             }
 
-            // 4. Явный мусор
-            if (JUNK_PATTERN.matcher(cleaned).matches()) {
-                invalid.add(rawLine);
-                continue;
-            }
-
-            // 5. Нормализуем "похожие" символы ТОЛЬКО для проверки
+            // 4. Нормализуем "похожие" символы для проверки
             String check = normalizeSimilarChars(cleaned);
 
-            // 6. Классифицируем по нормализованной строке
-            if (EAES_PREFIX.matcher(check).matches()) {
-                eaeu.add(cleaned);            // сохраняем оригинал
-            } else if (RF_PREFIX.matcher(check).matches()) {
-                rf.add(cleaned);              // сохраняем оригинал
+            // 5. РФ-формат — в РФ, всё остальное — в ЕАЭС
+            if (RF_PREFIX.matcher(check).matches()) {
+                rf.add(cleaned);
             } else {
-                invalid.add(rawLine);
+                eaeu.add(cleaned);
             }
         }
 
