@@ -2,6 +2,7 @@ package com.example.fsa_gov.controller;
 
 import com.example.fsa_gov.parser.dto.ParseResult;
 import com.example.fsa_gov.service.CertificateImportService;
+import com.example.fsa_gov.service.NormalizeCheckService;
 import com.example.fsa_gov.service.job.ImportJobState;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -19,6 +20,7 @@ import java.util.Map;
 public class CertificateImportController {
 
     private final CertificateImportService importService;
+    private final NormalizeCheckService normalizeCheckService;
 
     @PostMapping("/parse")
     @Operation(summary = "Распарсить список без проверки")
@@ -51,4 +53,32 @@ public class CertificateImportController {
     public ResponseEntity<ImportJobState> runSync(@RequestBody List<String> lines) {
         return ResponseEntity.ok(importService.runSync(lines));
     }
+
+
+        /**
+         * Диагностический endpoint: сравнить результаты импорта «как есть»
+         * и после нормализации номеров.
+         *
+         * Возвращает сводку:
+         *  - сколько найдено до нормализации;
+         *  - сколько найдено после;
+         *  - список изменённых номеров (было → стало);
+         *  - полные списки найденных / не найденных по каждому прогону.
+         */
+        @PostMapping("/normalize-check")
+        @Operation(
+                summary = "Проверить нормализацию на списке номеров",
+                description = """
+                    Прогоняет один и тот же список дважды:
+                    1) как есть;
+                    2) после нормализации (латиница → кириллица, чистка разделителей).
+
+                    Возвращает сравнение: сколько номеров нашлось до и после,
+                    какие номера были изменены, полные списки найденных/не найденных.
+                    """
+        )
+        public ResponseEntity<Map<String, Object>> normalizeCheck(
+                @RequestBody List<String> lines) {
+            return ResponseEntity.ok(normalizeCheckService.check(lines));
+        }
 }

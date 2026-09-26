@@ -10,7 +10,7 @@ import java.util.List;
  * Поля сделаны устойчивыми к различиям схем РФ/ЕАЭС.
  */
 @Data
-@JsonIgnoreProperties(ignoreUnknown = true)   // игнорируем новые поля
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class CertificateResponseDto {
 
     /** ID документа. ФСА отдаёт либо число, либо UUID-строку — поэтому String. */
@@ -19,8 +19,18 @@ public class CertificateResponseDto {
     /** Внутренний ObjectId (только у ЕАЭС). */
     private String objectId;
 
-    /** Номер документа. */
+    /** Номер документа (как хранит ФСА — канонический). */
     private String numberDoc;
+
+    /**
+     * Исходный номер, который искали.
+     *
+     * Заполняется всегда:
+     *  - при обычном флоу: sourceNumber == numberDoc;
+     *  - при нормализации: sourceNumber = номер ДО нормализации,
+     *    numberDoc = номер ПОСЛЕ (как вернул ФСА).
+     */
+    private String sourceNumber;
 
     /** Дата регистрации YYYY-MM-DD. */
     private String regDate;
@@ -29,17 +39,12 @@ public class CertificateResponseDto {
     private String endDate;
 
     // --- Статусы: РФ и ЕАЭС отдают по-разному ---
-    /** РФ: числовой статус (6, 14, 15...). */
     private Integer idStatus;
-    /** ЕАЭС: строковый статус ("01", "02"...). */
     private String idStatusEAEU;
-    /** РФ: числовой статус в реестре РФ (может отсутствовать у ЕАЭС). */
     private Integer idStatusInRF;
 
     // --- Типы документов ---
-    /** РФ: числовой тип (2, 11...). */
     private Integer idDocType;
-    /** ЕАЭС: строковый тип ("05"...). */
     private String idDocTypeEAEU;
 
     // --- Продукция и регламенты ---
