@@ -5,7 +5,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.SerializationFeature;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -40,30 +39,26 @@ public class FileResultWriter {
         return file.toAbsolutePath().toString();
     }
 
-    /** Объединённый файл «не найдено + мусор». */
+    /** Файл «не найдено + мусор». */
     public String writeNotFound(String outputDir, String fileName,
-                                List<String> rfNotFound,
-                                List<String> eaeuNotFound,
+                                List<String> notFound,
                                 List<String> invalidEntries) throws IOException {
         Path dir = Path.of(outputDir);
         Files.createDirectories(dir);
         Path file = dir.resolve(fileName);
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("rfNotFoundCount",   rfNotFound.size());
-        payload.put("eaeuNotFoundCount", eaeuNotFound.size());
-        payload.put("invalidCount",      invalidEntries.size());
-        payload.put("rfNotFound",        rfNotFound);
-        payload.put("eaeuNotFound",      eaeuNotFound);
-        payload.put("invalidEntries",    invalidEntries);
+        payload.put("notFoundCount",   notFound.size());
+        payload.put("invalidCount",    invalidEntries.size());
+        payload.put("notFound",        notFound);
+        payload.put("invalidEntries",  invalidEntries);
 
         String json = objectMapper.writerWithDefaultPrettyPrinter()
                 .writeValueAsString(payload);
         Files.writeString(file, json, StandardCharsets.UTF_8);
 
-        log.info("Записан файл {}: РФ-не найдено={}, ЕАЭС-не найдено={}, мусор={}",
-                file.toAbsolutePath(),
-                rfNotFound.size(), eaeuNotFound.size(), invalidEntries.size());
+        log.info("Записан файл {}: не найдено={}, мусор={}",
+                file.toAbsolutePath(), notFound.size(), invalidEntries.size());
         return file.toAbsolutePath().toString();
     }
 }

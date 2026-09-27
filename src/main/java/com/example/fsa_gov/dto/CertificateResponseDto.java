@@ -32,6 +32,14 @@ public class CertificateResponseDto {
      */
     private String sourceNumber;
 
+    /**
+     * Флаг: был ли номер нормализован перед отправкой в ФСА.
+     *
+     * true  — номер изменён нормализатором (sourceNumber != numberDoc в большинстве случаев);
+     * false — номер ушёл как есть (sourceNumber == numberDoc).
+     */
+    private boolean normalized;
+
     /** Дата регистрации YYYY-MM-DD. */
     private String regDate;
 

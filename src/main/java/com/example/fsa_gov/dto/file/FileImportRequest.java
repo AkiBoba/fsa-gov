@@ -22,6 +22,10 @@ public class FileImportRequest {
     private Integer batchSize = 1000;
 
     @Schema(description = "Папка для выходных файлов",
-            example = "D:/files/output", defaultValue = "./output")
-    private String outputDir = "./output";
+            example = "D:/files/output", defaultValue = "D:/files/output")
+    private String outputDir = "D:/files/output";
+
+    @Schema(description = "Применять нормализацию номеров перед импортом",
+            example = "false", defaultValue = "false")
+    private Boolean normalize = false;
 }

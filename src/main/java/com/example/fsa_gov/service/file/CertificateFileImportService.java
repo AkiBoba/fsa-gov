@@ -2,6 +2,7 @@ package com.example.fsa_gov.service.file;
 
 import com.example.fsa_gov.dto.CertificateResponseDto;
 import com.example.fsa_gov.dto.file.FileImportResult;
+import com.example.fsa_gov.parser.CertificateNumberNormalizer;
 import com.example.fsa_gov.service.CertificateImportService;
 import com.example.fsa_gov.service.job.ImportJobState;
 import lombok.RequiredArgsConstructor;
@@ -9,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,7 +19,7 @@ import java.util.Map;
  * Оркестратор: читает файл, режет на батчи, гоняет через существующий
  * CertificateImportService.runSync, аккумулирует результаты.
  *
- * НЕ меняет существующий код. Использует только его публичные методы.
+ * Опционально нормализует номера перед импортом (флаг `normalize`).
  */
 @Slf4j
 @Service
@@ -27,11 +29,13 @@ public class CertificateFileImportService {
     private final FileLineReader fileLineReader;
     private final CertificateImportService importService;
     private final FileResultWriter resultWriter;
+    private final CertificateNumberNormalizer normalizer;
 
     public FileImportResult importFromFile(String filePath,
                                            int columnIndex,
                                            int batchSize,
-                                           String outputDir) throws IOException {
+                                           String outputDir,
+                                           boolean normalize) throws IOException {
 
         // 1. Читаем строки
         List<String> allLines = fileLineReader.readLines(filePath, columnIndex);
@@ -39,59 +43,103 @@ public class CertificateFileImportService {
             throw new IOException("Файл не содержит строк: " + filePath);
         }
 
+        // 2. Нормализация (если включена)
+        Map<String, String> normalizedMap = new LinkedHashMap<>();  // normalized → original
+        List<String> linesForImport = new ArrayList<>(allLines.size());
+
+        for (String original : allLines) {
+            if (normalize) {
+                String norm = normalizer.normalize(original);
+                linesForImport.add(norm);
+                if (norm != null && !norm.equals(original)) {
+                    normalizedMap.putIfAbsent(norm, original);
+                }
+            } else {
+                linesForImport.add(original);
+            }
+        }
+
         FileImportResult result = new FileImportResult();
         result.setTotalLines(allLines.size());
+        result.setNormalizeEnabled(normalize);
+        result.setTotalNormalized(normalizedMap.size());
 
-        // 2. Итерации по batchSize
-        int batches = (allLines.size() + batchSize - 1) / batchSize;
+        // 3. Итерации по batchSize
+        int batches = (linesForImport.size() + batchSize - 1) / batchSize;
         result.setTotalBatches(batches);
-        log.info("Файл {}: всего строк={}, батчей={} по {}",
-                filePath, allLines.size(), batches, batchSize);
+        log.info("Файл {}: всего строк={}, батчей={} по {}, normalize={}",
+                filePath, allLines.size(), batches, batchSize, normalize);
 
         for (int i = 0; i < batches; i++) {
             int from = i * batchSize;
-            int to = Math.min(from + batchSize, allLines.size());
-            List<String> batch = allLines.subList(from, to);
+            int to = Math.min(from + batchSize, linesForImport.size());
+            List<String> batch = linesForImport.subList(from, to);
 
             log.info("Батч {}/{}: строк {}-{}", i + 1, batches, from, to);
             ImportJobState batchResult = importService.runSync(batch);
 
-            // 3. Аккумулируем
-            mergeFound(result.getRfFound(), batchResult.getRfFound());
-            mergeFound(result.getEaeuFound(), batchResult.getEaeuFound());
+            // 4. Проставляем sourceNumber и normalized в найденных DTO
+            if (normalize) {
+                markNormalized(batchResult.getRfFound(),   normalizedMap);
+                markNormalized(batchResult.getEaeuFound(), normalizedMap);
+            }
 
-            addAllDistinct(result.getRfNotFound(),    batchResult.getRfNotFound());
-            addAllDistinct(result.getEaeuNotFound(),  batchResult.getEaeuNotFound());
+            // 5. Аккумулируем found — и РФ, и ЕАЭС в один список
+            mergeFound(result.getFound(), batchResult.getRfFound());
+            mergeFound(result.getFound(), batchResult.getEaeuFound());
+
+            // 6. Аккумулируем notFound — тоже в один список
+            addAllDistinct(result.getNotFound(), batchResult.getRfNotFound());
+            addAllDistinct(result.getNotFound(), batchResult.getEaeuNotFound());
             addAllDistinct(result.getInvalidEntries(), batchResult.getInvalidEntries());
 
-            log.info("После батча {}: РФ={}, ЕАЭС={}, не найдено РФ={}, не найдено ЕАЭС={}, мусор={}",
+            log.info("После батча {}: found={}, notFound={}, мусор={}",
                     i + 1,
-                    result.getRfFoundCount(), result.getEaeuFoundCount(),
-                    result.getRfNotFoundCount(), result.getEaeuNotFoundCount(),
+                    result.getFoundCount(),
+                    result.getNotFoundCount(),
                     result.getInvalidCount());
         }
 
-        // 4. Пишем файлы
-        String rfFile      = resultWriter.writeDtoList(outputDir, "result-rf-found.json",
-                result.getRfFound());
-        String eaeuFile    = resultWriter.writeDtoList(outputDir, "result-eaeu-found.json",
-                result.getEaeuFound());
-        String notFoundFile = resultWriter.writeNotFound(outputDir, "result-not-found.json",
-                result.getRfNotFound(), result.getEaeuNotFound(), result.getInvalidEntries());
+        // 7. Пишем файлы
+        String foundFile = resultWriter.writeDtoList(
+                outputDir, "result-found.json", result.getFound());
+        String notFoundFile = resultWriter.writeNotFound(
+                outputDir, "result-not-found.json",
+                result.getNotFound(), result.getInvalidEntries());
 
-        result.setRfFoundFile(rfFile);
-        result.setEaeuFoundFile(eaeuFile);
+        result.setFoundFile(foundFile);
         result.setNotFoundFile(notFoundFile);
 
-        log.info("Импорт завершён: РФ={}, ЕАЭС={}, не найдено РФ={}, не найдено ЕАЭС={}, мусор={}",
-                result.getRfFoundCount(), result.getEaeuFoundCount(),
-                result.getRfNotFoundCount(), result.getEaeuNotFoundCount(),
-                result.getInvalidCount());
+        log.info("Импорт завершён: found={}, notFound={}, мусор={}, normalize={}",
+                result.getFoundCount(), result.getNotFoundCount(),
+                result.getInvalidCount(), normalize);
 
         return result;
     }
 
     /* ================= helpers ================= */
+
+    /**
+     * Проставляет sourceNumber и normalized в найденных DTO.
+     */
+    private void markNormalized(List<CertificateResponseDto> list,
+                                Map<String, String> normalizedMap) {
+        if (list == null) return;
+        for (CertificateResponseDto dto : list) {
+            if (dto == null || dto.getNumberDoc() == null) continue;
+
+            String source = normalizedMap.get(dto.getNumberDoc());
+            if (source != null) {
+                dto.setSourceNumber(source);
+                dto.setNormalized(true);
+            } else {
+                if (dto.getSourceNumber() == null) {
+                    dto.setSourceNumber(dto.getNumberDoc());
+                }
+                dto.setNormalized(false);
+            }
+        }
+    }
 
     private void mergeFound(List<CertificateResponseDto> target,
                             List<CertificateResponseDto> source) {

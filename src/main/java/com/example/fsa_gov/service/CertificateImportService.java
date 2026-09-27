@@ -1,5 +1,6 @@
 package com.example.fsa_gov.service;
 
+import com.example.fsa_gov.dto.CertificateResponseDto;
 import com.example.fsa_gov.parser.CertificateListParser;
 import com.example.fsa_gov.parser.dto.ParseResult;
 import com.example.fsa_gov.service.job.ImportJobRunner;
@@ -32,7 +33,7 @@ public class CertificateImportService {
 
     public String startImportAsync(ParseResult parsed) {
         ImportJobState state = jobStore.create();
-        jobRunner.run(state, parsed); // @Async
+        jobRunner.run(state, parsed);
         return state.getJobId();
     }
 
@@ -41,12 +42,31 @@ public class CertificateImportService {
     }
 
     /**
-     * Синхронный запуск: ждёт, пока job не перейдёт в SUCCESS/FAILED.
+     * Синхронный запуск. После завершения — проставляет sourceNumber = numberDoc
+     * во всех найденных DTO (обычный флоу без нормализации).
      */
     public ImportJobState runSync(List<String> lines) {
         ParseResult parsed = parseLines(lines);
         ImportJobState state = jobStore.create();
-        jobRunner.runSync(state, parsed); // блокирующий вызов
+        jobRunner.runSync(state, parsed);
+
+        // Проставляем sourceNumber = numberDoc (обычный флоу)
+        fillSourceNumber(state.getRfFound());
+        fillSourceNumber(state.getEaeuFound());
+
         return state;
+    }
+
+    /**
+     * Проставляет sourceNumber = numberDoc для всех DTO,
+     * у которых sourceNumber ещё не заполнен.
+     */
+    private void fillSourceNumber(List<CertificateResponseDto> list) {
+        if (list == null) return;
+        for (CertificateResponseDto dto : list) {
+            if (dto != null && dto.getSourceNumber() == null) {
+                dto.setSourceNumber(dto.getNumberDoc());
+            }
+        }
     }
 }

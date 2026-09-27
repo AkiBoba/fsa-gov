@@ -18,7 +18,6 @@ import java.io.IOException;
 
 /**
  * Импорт из файла: путь к файлу → батчи → ФСА → JSON-файлы результатов.
- * Не меняет существующие контроллеры.
  */
 @Slf4j
 @RestController
@@ -37,20 +36,28 @@ public class CertificateFileImportController {
                     режет на батчи по `batchSize`,
                     гоняет через ФСА (РФ + ЕАЭС + fallback),
                     пишет 3 JSON-файла в `outputDir` и возвращает сводку.
+
+                    Если `normalize = true` — номера нормализуются перед импортом
+                    (латиница → кириллица, чистка разделителей).
+                    В каждом найденном DTO будут заполнены:
+                      - sourceNumber — исходный номер из файла;
+                      - normalized   — был ли номер изменён нормализатором.
                     """
     )
     public ResponseEntity<FileImportResult> run(@Valid @RequestBody FileImportRequest request)
             throws IOException {
 
-        log.info("Запуск импорта из файла: path={}, column={}, batch={}, output={}",
+        log.info("Запуск импорта из файла: path={}, column={}, batch={}, output={}, normalize={}",
                 request.getFilePath(), request.getColumnIndex(),
-                request.getBatchSize(), request.getOutputDir());
+                request.getBatchSize(), request.getOutputDir(),
+                request.getNormalize());
 
         FileImportResult result = fileImportService.importFromFile(
                 request.getFilePath(),
                 request.getColumnIndex() != null ? request.getColumnIndex() : 0,
                 request.getBatchSize() != null ? request.getBatchSize() : 1000,
-                request.getOutputDir() != null ? request.getOutputDir() : "./output"
+                request.getOutputDir() != null ? request.getOutputDir() : "D:/files/output",
+                Boolean.TRUE.equals(request.getNormalize())
         );
 
         return ResponseEntity.ok(result);

@@ -7,12 +7,17 @@ import com.example.fsa_gov.service.job.ImportJobState;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/certificates/import")
@@ -55,30 +60,39 @@ public class CertificateImportController {
     }
 
 
-        /**
-         * Диагностический endpoint: сравнить результаты импорта «как есть»
-         * и после нормализации номеров.
-         *
-         * Возвращает сводку:
-         *  - сколько найдено до нормализации;
-         *  - сколько найдено после;
-         *  - список изменённых номеров (было → стало);
-         *  - полные списки найденных / не найденных по каждому прогону.
-         */
-        @PostMapping("/normalize-check")
-        @Operation(
-                summary = "Проверить нормализацию на списке номеров",
-                description = """
-                    Прогоняет один и тот же список дважды:
-                    1) как есть;
-                    2) после нормализации (латиница → кириллица, чистка разделителей).
+    /**
+     * Проверяет нормализацию на файле result-not-found.json:
+     *  1) читает файл → список номеров;
+     *  2) строит мапу original → normalized;
+     *  3) прогоняет оба списка через существующий флоу;
+     *  4) проставляет sourceNumber в найденных DTO;
+     *  5) сохраняет result-rf-found.json и result-eaeu-found.json;
+     *  6) возвращает сводку.
+     */
+    @PostMapping(
+            value = "/normalize-check",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
+    @Operation(
+            summary = "Проверить нормализацию по файлу result-not-found.json",
+            description = """
+                    Принимает result-not-found.json (multipart/form-data, поле `file`),
+                    нормализует номера, прогоняет через существующий флоу,
+                    проставляет sourceNumber в найденных DTO и сохраняет
+                    result-rf-found.json / result-eaeu-found.json.
 
-                    Возвращает сравнение: сколько номеров нашлось до и после,
-                    какие номера были изменены, полные списки найденных/не найденных.
+                    Параметр `outputDir` (query, по умолчанию "D:/files/output") —
+                    куда сохранять результаты.
                     """
-        )
-        public ResponseEntity<Map<String, Object>> normalizeCheck(
-                @RequestBody List<String> lines) {
-            return ResponseEntity.ok(normalizeCheckService.check(lines));
-        }
+    )
+    public ResponseEntity<Map<String, Object>> normalizeCheck(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "outputDir", defaultValue = "D:/files/output") String outputDir)
+            throws IOException {
+
+        log.info("normalize-check: file={}, outputDir={}",
+                file.getOriginalFilename(), outputDir);
+
+        return ResponseEntity.ok(normalizeCheckService.check(file, outputDir));
+    }
 }

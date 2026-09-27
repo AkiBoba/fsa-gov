@@ -15,21 +15,27 @@ public class FileImportResult {
     private int totalLines;
     private int totalBatches;
 
-    private List<CertificateResponseDto> rfFound   = new ArrayList<>();
-    private List<CertificateResponseDto> eaeuFound = new ArrayList<>();
+    /** Был ли включён режим нормализации. */
+    private boolean normalizeEnabled;
 
-    private List<String> rfNotFound    = new ArrayList<>();
-    private List<String> eaeuNotFound  = new ArrayList<>();
+    /** Сколько номеров реально изменилось в процессе нормализации. */
+    private int totalNormalized;
+
+    /** Все найденные документы — и РФ, и ЕАЭС в одном списке.
+     *  Различить можно по полю objectId:
+     *   - objectId != null → ЕАЭС
+     *   - иначе id != null → РФ
+     */
+    private List<CertificateResponseDto> found = new ArrayList<>();
+
+    private List<String> notFound    = new ArrayList<>();
     private List<String> invalidEntries = new ArrayList<>();
 
     /** Куда записали результаты */
-    private String rfFoundFile;
-    private String eaeuFoundFile;
+    private String foundFile;
     private String notFoundFile;
 
-    public int getRfFoundCount()     { return rfFound.size(); }
-    public int getEaeuFoundCount()   { return eaeuFound.size(); }
-    public int getRfNotFoundCount()  { return rfNotFound.size(); }
-    public int getEaeuNotFoundCount(){ return eaeuNotFound.size(); }
-    public int getInvalidCount()     { return invalidEntries.size(); }
+    public int getFoundCount()     { return found.size(); }
+    public int getNotFoundCount()  { return notFound.size(); }
+    public int getInvalidCount()   { return invalidEntries.size(); }
 }

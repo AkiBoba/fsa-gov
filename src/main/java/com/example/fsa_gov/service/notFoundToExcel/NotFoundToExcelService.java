@@ -28,6 +28,7 @@ public class NotFoundToExcelService {
 
     private final ObjectMapper objectMapper;
 
+    /** Мусор — Письма, Решения, Паспорта и т.п. */
     private static final Pattern JUNK_PATTERN = Pattern.compile(
             "^(Письмо|ПИСЬМО|Пиьсмо|Пиьсо|Решение|РЕШЕНИЕ|Отказное|ОТКАЗНОЕ|" +
                     "Паспорт|ПАСПОРТ|Уведомление|Удостоверение|Свидетельство|Справка|" +
@@ -36,35 +37,51 @@ public class NotFoundToExcelService {
                     "Информационное письмо|Отказное решение|Удостоверение о качестве).*",
             Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
-    /** Обёртка одной строки: номер + источник (RF / ЕАЭС). */
+    /** РФ-префикс — чтобы отличить РФ от ЕАЭС. */
+    private static final Pattern RF_PREFIX = Pattern.compile(
+            "^(РОСС\\s+RU|РОСС\\s+[A-Z]{2}\\.|РООС\\s+RU|ТС\\s+RU|RU\\.\\d|\\d{6}\\/).*",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
     private record Entry(String number, String source) {}
 
     public NotFoundExportResult export(NotFoundToExcelRequest req) throws IOException {
-        // 1. Читаем JSON
+
+        // 1. Читаем JSON (совместимо со старым и новым форматом)
         NotFoundFileDto json = objectMapper.readValue(
                 Path.of(req.getJsonFilePath()).toFile(), NotFoundFileDto.class);
 
-        List<String> rf   = json.getRfNotFound()   != null ? json.getRfNotFound()   : List.of();
-        List<String> eaeu = json.getEaeuNotFound() != null ? json.getEaeuNotFound() : List.of();
+        List<String> allNotFound = json.getAllNotFound();
+        List<String> invalidEntries = json.getInvalidEntries() != null
+                ? json.getInvalidEntries() : List.of();
 
-        // 2. Разделяем на valid / junk, оборачивая в Entry с источником
-        List<Entry> rfValidEntries   = wrap(filterValid(rf),   "RF");
-        List<Entry> rfJunkEntries    = wrap(filterJunk(rf),    "RF");
-        List<Entry> eaeuValidEntries = wrap(filterValid(eaeu), "ЕАЭС");
-        List<Entry> eaeuJunkEntries  = wrap(filterJunk(eaeu),  "ЕАЭС");
-        List<Entry> allEntries       = wrapAll(rf, eaeu);
+        // 2. Разделяем по префиксу на РФ / ЕАЭС и фильтруем мусор
+        List<Entry> rfValid   = new ArrayList<>();
+        List<Entry> eaeuValid = new ArrayList<>();
+        List<Entry> rfJunk    = new ArrayList<>();
+        List<Entry> eaeuJunk  = new ArrayList<>();
+
+        for (String number : allNotFound) {
+            if (number == null) continue;
+            boolean isRf = RF_PREFIX.matcher(number).matches();
+            boolean isJunk = JUNK_PATTERN.matcher(number.trim()).matches();
+
+            if (isRf) {
+                if (isJunk) rfJunk.add(new Entry(number, "RF"));
+                else        rfValid.add(new Entry(number, "RF"));
+            } else {
+                if (isJunk) eaeuJunk.add(new Entry(number, "ЕАЭС"));
+                else        eaeuValid.add(new Entry(number, "ЕАЭС"));
+            }
+        }
 
         // 3. Пишем XLSX
         try (XSSFWorkbook book = new XSSFWorkbook()) {
             if (Boolean.TRUE.equals(req.getSplitSheets())) {
-                writeSheet(book, "Возможно валидные",
-                        concat(rfValidEntries, eaeuValidEntries));
-                writeSheet(book, "Мусор",
-                        concat(rfJunkEntries, eaeuJunkEntries));
-                writeSheet(book, "Все подряд",
-                        allEntries);
+                writeSheet(book, "Возможно валидные", concat(rfValid, eaeuValid));
+                writeSheet(book, "Мусор", concat(rfJunk, eaeuJunk));
+                writeSheet(book, "Все подряд", concat(concat(rfValid, eaeuValid), concat(rfJunk, eaeuJunk)));
             } else {
-                writeSheet(book, "Все", allEntries);
+                writeSheet(book, "Все", concat(concat(rfValid, eaeuValid), concat(rfJunk, eaeuJunk)));
             }
 
             Path out = Path.of(req.getExcelFilePath());
@@ -77,46 +94,17 @@ public class NotFoundToExcelService {
         }
 
         NotFoundExportResult result = new NotFoundExportResult();
-        result.setRfTotal(rf.size());
-        result.setEaeuTotal(eaeu.size());
-        result.setRfValid(rfValidEntries.size());
-        result.setEaeuValid(eaeuValidEntries.size());
-        result.setRfJunk(rfJunkEntries.size());
-        result.setEaeuJunk(eaeuJunkEntries.size());
+        result.setRfTotal(rfValid.size() + rfJunk.size());
+        result.setEaeuTotal(eaeuValid.size() + eaeuJunk.size());
+        result.setRfValid(rfValid.size());
+        result.setEaeuValid(eaeuValid.size());
+        result.setRfJunk(rfJunk.size());
+        result.setEaeuJunk(eaeuJunk.size());
         result.setExcelPath(req.getExcelFilePath());
         return result;
     }
 
-    /* ===================== filters ===================== */
-
-    private List<String> filterValid(List<String> list) {
-        return list.stream()
-                .filter(s -> s != null && !JUNK_PATTERN.matcher(s.trim()).matches())
-                .toList();
-    }
-
-    private List<String> filterJunk(List<String> list) {
-        return list.stream()
-                .filter(s -> s != null && JUNK_PATTERN.matcher(s.trim()).matches())
-                .toList();
-    }
-
-    /* ===================== wrappers ===================== */
-
-    private List<Entry> wrap(List<String> list, String source) {
-        List<Entry> out = new ArrayList<>(list.size());
-        for (String s : list) {
-            if (s != null) out.add(new Entry(s, source));
-        }
-        return out;
-    }
-
-    private List<Entry> wrapAll(List<String> rf, List<String> eaeu) {
-        List<Entry> out = new ArrayList<>(rf.size() + eaeu.size());
-        for (String s : rf)   if (s != null) out.add(new Entry(s, "RF"));
-        for (String s : eaeu) if (s != null) out.add(new Entry(s, "ЕАЭС"));
-        return out;
-    }
+    /* ===================== helpers ===================== */
 
     private List<Entry> concat(List<Entry> a, List<Entry> b) {
         List<Entry> out = new ArrayList<>(a.size() + b.size());
@@ -125,12 +113,9 @@ public class NotFoundToExcelService {
         return out;
     }
 
-    /* ===================== xlsx writer ===================== */
-
     private void writeSheet(XSSFWorkbook book, String name, List<Entry> entries) {
         Sheet sheet = book.createSheet(name);
 
-        // Заголовок
         CellStyle headerStyle = createHeaderStyle(book);
         Row header = sheet.createRow(0);
         header.createCell(0).setCellValue("№");
@@ -138,7 +123,6 @@ public class NotFoundToExcelService {
         header.createCell(2).setCellValue("Источник");
         for (int i = 0; i <= 2; i++) header.getCell(i).setCellStyle(headerStyle);
 
-        // Данные
         int rowIdx = 1;
         for (Entry e : entries) {
             Row row = sheet.createRow(rowIdx);
@@ -148,12 +132,9 @@ public class NotFoundToExcelService {
             rowIdx++;
         }
 
-        // Ширина
         sheet.setColumnWidth(0, 1500);
         sheet.setColumnWidth(1, 12000);
         sheet.setColumnWidth(2, 3000);
-
-        // Заморозка заголовка
         sheet.createFreezePane(0, 1);
     }
 
