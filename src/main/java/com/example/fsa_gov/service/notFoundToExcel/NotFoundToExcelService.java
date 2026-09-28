@@ -12,6 +12,7 @@ import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -44,11 +45,13 @@ public class NotFoundToExcelService {
 
     private record Entry(String number, String source) {}
 
-    public NotFoundExportResult export(NotFoundToExcelRequest req) throws IOException {
+    public NotFoundExportResult export(MultipartFile file,
+                                       String excelFilePath,
+                                       boolean splitSheets) throws IOException {
 
         // 1. Читаем JSON (совместимо со старым и новым форматом)
         NotFoundFileDto json = objectMapper.readValue(
-                Path.of(req.getJsonFilePath()).toFile(), NotFoundFileDto.class);
+                file.getInputStream(), NotFoundFileDto.class);
 
         List<String> allNotFound = json.getAllNotFound();
         List<String> invalidEntries = json.getInvalidEntries() != null
@@ -76,7 +79,7 @@ public class NotFoundToExcelService {
 
         // 3. Пишем XLSX
         try (XSSFWorkbook book = new XSSFWorkbook()) {
-            if (Boolean.TRUE.equals(req.getSplitSheets())) {
+            if (splitSheets) {
                 writeSheet(book, "Возможно валидные", concat(rfValid, eaeuValid));
                 writeSheet(book, "Мусор", concat(rfJunk, eaeuJunk));
                 writeSheet(book, "Все подряд", concat(concat(rfValid, eaeuValid), concat(rfJunk, eaeuJunk)));
@@ -84,7 +87,7 @@ public class NotFoundToExcelService {
                 writeSheet(book, "Все", concat(concat(rfValid, eaeuValid), concat(rfJunk, eaeuJunk)));
             }
 
-            Path out = Path.of(req.getExcelFilePath());
+            Path out = Path.of(excelFilePath);
             if (out.getParent() != null) {
                 Files.createDirectories(out.getParent());
             }
@@ -100,7 +103,7 @@ public class NotFoundToExcelService {
         result.setEaeuValid(eaeuValid.size());
         result.setRfJunk(rfJunk.size());
         result.setEaeuJunk(eaeuJunk.size());
-        result.setExcelPath(req.getExcelFilePath());
+        result.setExcelPath(excelFilePath);
         return result;
     }
 
