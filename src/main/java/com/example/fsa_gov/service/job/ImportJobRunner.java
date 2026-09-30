@@ -14,9 +14,11 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -66,14 +68,14 @@ public class ImportJobRunner {
             state.setEaeuFound(eaeuFound);
 
             log.info("Job {}: ошибок РФ={}, ЕАЭС={}", state.getJobId(), rfErrors.size(), eaeuErrors.size());
-            for (AsyncErrorEntry e : rfErrors) {
-                log.info("  RF  err: numberDoc=[{}], reason={}, matchCount={}",
-                        e.getNumberDoc(), e.getReason(), e.getMatchCount());
-            }
-            for (AsyncErrorEntry e : eaeuErrors) {
-                log.info("  EAEU err: numberDoc=[{}], reason={}, matchCount={}",
-                        e.getNumberDoc(), e.getReason(), e.getMatchCount());
-            }
+//            for (AsyncErrorEntry e : rfErrors) {
+//                log.info("  RF  err: numberDoc=[{}], reason={}, matchCount={}",
+//                        e.getNumberDoc(), e.getReason(), e.getMatchCount());
+//            }
+//            for (AsyncErrorEntry e : eaeuErrors) {
+//                log.info("  EAEU err: numberDoc=[{}], reason={}, matchCount={}",
+//                        e.getNumberDoc(), e.getReason(), e.getMatchCount());
+//            }
 
             List<String> rfNotFound = extractNotFound(rfErrors);
             List<String> eaeuNotFound = extractNotFound(eaeuErrors);
@@ -94,6 +96,27 @@ public class ImportJobRunner {
                 state.setFallbackRfRequestId(fbId);
                 waitForCompletion(fbId);
                 state.setRfFound(mergeDistinctDtos(state.getRfFound(), readResult(fbId)));
+            }
+
+            // Собираем номера, которые в итоге найдены
+            Set<String> foundNumbers = new HashSet<>();
+            if (state.getRfFound() != null)   for (var d : state.getRfFound())   {
+                if (d != null && d.getNumberDoc() != null) foundNumbers.add(d.getNumberDoc());
+            }
+            if (state.getEaeuFound() != null) for (var d : state.getEaeuFound()) {
+                if (d != null && d.getNumberDoc() != null) foundNumbers.add(d.getNumberDoc());
+            }
+
+            // Убираем из notFound те, что найдены (по точному совпадению)
+            if (state.getRfNotFound() != null) {
+                state.setRfNotFound(state.getRfNotFound().stream()
+                        .filter(n -> !foundNumbers.contains(n))
+                        .toList());
+            }
+            if (state.getEaeuNotFound() != null) {
+                state.setEaeuNotFound(state.getEaeuNotFound().stream()
+                        .filter(n -> !foundNumbers.contains(n))
+                        .toList());
             }
 
             state.setStatus(ImportJobState.JobStatus.SUCCESS);
